@@ -17,19 +17,67 @@
 #  along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 from lxml import etree
+import base64
 
+
+from . import isoLanguages, cover
 from .constants import BookMeta
+
+ISBN='/fb:FictionBook/fb:description/fb:publish-info/fb:isbn/text()'
+PUBLISHER='/fb:FictionBook/fb:description/fb:publish-info/fb:publisher/text()'
+LANG='/fb:FictionBook/fb:description/fb:title-info/fb:lang/text()'
+SEQUENCE='/fb:FictionBook/fb:description/fb:title-info/fb:sequence'
+DATE='/fb:FictionBook/fb:description/fb:title-info/fb:date/text()'
+
+def get_cover(tmp_file_path, tree, ns) -> str:
+    image_id = tree.xpath('/fb:FictionBook/fb:description/fb:title-info/fb:coverpage/fb:image/@l:href', namespaces=ns)
+    if not image_id:
+        return None
+
+    image_b64 = tree.xpath(f'//*[@id="{image_id[0][1:]}"]/text()', namespaces=ns)
+    if not image_b64:
+        return None
+
+
+    img_data = base64.b64decode(image_b64[0])
+
+
+    return cover.cover_processing(tmp_file_path, img_data, image_id[0].split('.')[1])
+
+
+def get_description(tree, ns) -> str:
+    data = tree.xpath('/fb:FictionBook/fb:description/fb:title-info/fb:annotation', namespaces=ns)
+    if data:
+        return ''.join(data[0].itertext()).strip()
+
+    data = tree.xpath('/fb:FictionBook/fb:description/fb:publish-info/fb:book-name/text()', namespaces=ns)
+    if data:
+        return str(data[0]).strip()
+    return ''
+
+
+def get_text(path, tree, ns):
+    data = tree.xpath(path, namespaces=ns)
+    if data:
+        return str(data[0]).strip()
+
+    return ''
+
+def get_attribute(path, tree, ns, key):
+    data = tree.xpath(path, namespaces=ns)
+    if data:
+        return data[0].get(key)
+
+    return ''
 
 
 def get_fb2_info(tmp_file_path, original_file_extension):
-
     ns = {
         'fb': 'http://www.gribuser.ru/xml/fictionbook/2.0',
         'l': 'http://www.w3.org/1999/xlink',
     }
 
-    fb2_file = open(tmp_file_path, encoding="utf-8")
-    tree = etree.fromstring(fb2_file.read().encode())
+    tree = etree.parse(tmp_file_path)
 
     authors = tree.xpath('/fb:FictionBook/fb:description/fb:title-info/fb:author', namespaces=ns)
 
@@ -60,23 +108,22 @@ def get_fb2_info(tmp_file_path, original_file_extension):
         title = str(title[0])
     else:
         title = ''
-    description = tree.xpath('/fb:FictionBook/fb:description/fb:publish-info/fb:book-name/text()', namespaces=ns)
-    if len(description):
-        description = str(description[0])
-    else:
-        description = ''
+
 
     return BookMeta(
         file_path=tmp_file_path,
         extension=original_file_extension,
         title=title,
         author=author,
-        cover=None,
-        description=description,
+        cover=get_cover(tmp_file_path, tree, ns),
+        description=get_description(tree, ns),
         tags="",
-        series="",
-        series_id="",
-        languages="",
-        publisher="",
-        pubdate="",
-        identifiers=[])
+        series=get_attribute(SEQUENCE, tree, ns, "name"),
+        series_id=get_attribute(SEQUENCE, tree, ns, "number"),
+        languages=isoLanguages.get_lang3(get_text(LANG, tree, ns)),
+        publisher=get_text(PUBLISHER, tree, ns),
+        pubdate=get_text(DATE, tree, ns),
+        identifiers=[
+            ['isbn', get_text(ISBN, tree, ns)],
+        ],
+    )
